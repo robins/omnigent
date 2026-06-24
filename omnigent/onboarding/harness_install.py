@@ -47,10 +47,20 @@ from omnigent.onboarding.provider_config import ANTHROPIC_FAMILY, OPENAI_FAMILY
 # first-run ``run`` flow falls back to it, so it has install metadata too.
 PI_KEY = "pi"
 
+# Qwen Code uses npm installation and has login/logout commands similar to
+# other coding CLIs. The binary name is ``qwen``.
+QWEN_KEY = "qwen"
+
 # Cursor authenticates against its own backend (``cursor-agent login`` /
 # ``CURSOR_API_KEY``) with no provider/gateway credential, and ships via a curl
 # installer rather than npm — so it carries an ``install_hint``, not a ``package``.
 CURSOR_KEY = "cursor"
+
+# Goose authenticates against its own config (``goose configure`` → keyring /
+# ``~/.config/goose/config.yaml``) with no Omnigent-managed credential, and ships
+# via Homebrew / a curl installer rather than npm — so it carries an
+# ``install_hint``, not a ``package``.
+GOOSE_KEY = "goose"
 
 
 @dataclass(frozen=True)
@@ -114,6 +124,19 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
         status_args=("login", "status"),
     ),
     PI_KEY: HarnessInstallSpec("Pi", "pi", "@earendil-works/pi-coding-agent"),
+    QWEN_KEY: HarnessInstallSpec(
+        "Qwen Code",
+        "qwen",
+        "@qwen-code/qwen-code",
+        # NB: deliberately no login/logout/status args. Qwen *removed* its
+        # ``auth`` subcommand and has no CLI login — ``qwen login`` doesn't
+        # exist and ``qwen auth status`` prints "auth has been removed" and
+        # exits 0 (which would make harness_cli_logged_in falsely report a
+        # login via its exit-code fallback). Auth is via OpenAI-compatible env
+        # vars or the interactive ``/auth`` command; the setup wizard handles
+        # that in ``_manage_qwen_harness``. Leaving these None keeps
+        # harness_login/logout/cli_logged_in no-ops for qwen.
+    ),
     CURSOR_KEY: HarnessInstallSpec(
         "Cursor",
         "cursor-agent",
@@ -124,6 +147,12 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
         install_hint="curl https://cursor.com/install -fsS | bash",
         login_status_key="isAuthenticated",
     ),
+    GOOSE_KEY: HarnessInstallSpec(
+        "Goose",
+        "goose",
+        package=None,
+        install_hint="brew install block-goose-cli",
+    ),
 }
 
 
@@ -132,9 +161,10 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
 # :data:`_HARNESS_INSTALL` family key. Only the CLI-backed harnesses appear
 # here — the ones that cannot launch without a binary on ``PATH``:
 # ``claude-native`` wraps the ``claude`` CLI, ``codex-native`` the ``codex``
-# CLI, ``pi`` / ``pi-native`` the ``pi`` CLI, and ``cursor-native`` /
-# ``native-cursor`` the ``cursor-agent`` CLI (the native Cursor TUI, installed
-# via Cursor's curl installer rather than npm — see its ``install_hint``).
+# CLI, ``pi`` / ``pi-native`` the ``pi`` CLI, ``qwen`` / ``qwen-code`` the
+# ``qwen`` CLI, and ``cursor-native`` / ``native-cursor`` the ``cursor-agent``
+# CLI (the native Cursor TUI, installed via Cursor's curl installer rather than
+# npm — see its ``install_hint``).
 # SDK-based harnesses run in-process and are deliberately absent, so they
 # resolve to "no CLI required": ``claude-sdk``, ``codex``, ``openai-agents-sdk``,
 # and the SDK ``cursor`` harness (which drives the ``cursor-sdk`` Python package
@@ -146,6 +176,13 @@ _HARNESS_NAME_TO_KEY: dict[str, str] = {
     "pi-native": PI_KEY,
     "cursor-native": CURSOR_KEY,
     "native-cursor": CURSOR_KEY,
+    "goose-native": GOOSE_KEY,
+    "native-goose": GOOSE_KEY,
+    # Headless Goose (``harness: goose``, drives ``goose acp``) wraps the same
+    # ``goose`` CLI as the native TUI, so it gates on the same binary.
+    GOOSE_KEY: GOOSE_KEY,
+    QWEN_KEY: QWEN_KEY,
+    "qwen-code": QWEN_KEY,
 }
 
 

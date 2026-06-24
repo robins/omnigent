@@ -34,11 +34,14 @@ from omnigent.cli import (
     _is_removed_ad_hoc_invocation,
     _is_run_shorthand,
     _load_global_config,
+    _manage_goose_harness,
+    _manage_qwen_harness,
     _materialize_harness_launcher_file,
     _node_dependency_problem,
     _node_version,
     _pick_first_run_harness,
     _preregister_agent,
+    _qwen_auth_configured,
     _resolve_auto_open_conversation_from_config,
     _resolve_auto_open_conversation_setting,
     _resolve_bundle_env_vars,
@@ -4588,3 +4591,166 @@ def test_run_agent_with_native_terminal_harness_is_rejected() -> None:
             prompt=None,
             system_prompt=None,
         )
+
+
+# ── omnigent setup: Qwen Code drill-in (_manage_qwen_harness) ────────────
+
+
+def test_qwen_auth_configured_detects_env_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Env-var auth is detected; a fresh install with no auth is NOT.
+
+    Guards the reported bug: a just-installed qwen (no env vars, no ~/.qwen
+    creds) must report unauthenticated rather than a false "signed in".
+    """
+    # Point HOME at an empty dir so on-disk creds/settings are absent
+    # (Path.home() honors $HOME on POSIX).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in ("OPENAI_API_KEY", "BAILIAN_CODING_PLAN_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert _qwen_auth_configured() is False
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert _qwen_auth_configured() is True
+
+
+def test_qwen_auth_configured_reads_settings_selected_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An auth type selected via /auth (persisted to settings.json) is detected."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in ("OPENAI_API_KEY", "BAILIAN_CODING_PLAN_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    qwen_dir = tmp_path / ".qwen"
+    qwen_dir.mkdir()
+    (qwen_dir / "settings.json").write_text(
+        '{"security": {"auth": {"selectedType": "openai"}}}', encoding="utf-8"
+    )
+
+    assert _qwen_auth_configured() is True
+
+
+def test_manage_qwen_harness_declines_install_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the qwen CLI is missing and the user declines, the drill-in returns.
+
+    Declining install (choice 1) must bail without installing or launching qwen.
+    """
+    import omnigent.onboarding.harness_install as hi
+    import omnigent.onboarding.interactive as it
+
+    monkeypatch.setattr(hi, "harness_cli_installed", lambda key: False)
+    monkeypatch.setattr(it, "console", Mock())
+    install = Mock()
+    monkeypatch.setattr(hi, "install_harness_cli", install)
+    launch = Mock()
+    monkeypatch.setattr("omnigent.cli._launch_qwen_auth", launch)
+    # The install prompt offers [install, no, show-command]; pick "No".
+    monkeypatch.setattr(it, "select", lambda *a, **k: 1)
+
+    _manage_qwen_harness()
+
+    install.assert_not_called()
+    launch.assert_not_called()
+
+
+def test_manage_qwen_harness_back_does_not_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the CLI installed, choosing "← Back" exits without launching qwen.
+
+    There is no ``qwen login`` to drive — the drill-in only offers /auth launch
+    and help, so a plain Back must be a clean no-op.
+    """
+    import omnigent.onboarding.harness_install as hi
+    import omnigent.onboarding.interactive as it
+
+    monkeypatch.setattr(hi, "harness_cli_installed", lambda key: True)
+    monkeypatch.setattr("omnigent.cli._qwen_auth_configured", lambda: False)
+    monkeypatch.setattr(it, "console", Mock())
+    launch = Mock(return_value="x")
+    monkeypatch.setattr("omnigent.cli._launch_qwen_auth", launch)
+    # rows = [Open Qwen to run /auth, Show auth options, ← Back]; pick Back (2).
+    monkeypatch.setattr(it, "select", lambda *a, **k: 2)
+
+    _manage_qwen_harness()
+
+    launch.assert_not_called()
+
+
+# ── omnigent setup: Goose drill-in (_manage_goose_harness) ───────────────
+
+
+def test_manage_goose_harness_missing_cli_shows_hint_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the goose CLI is missing, the drill-in shows the install hint and
+    returns without launching ``goose configure`` (Goose has no npm auto-install).
+    """
+    import omnigent.onboarding.harness_install as hi
+    import omnigent.onboarding.interactive as it
+
+    monkeypatch.setattr(hi, "harness_cli_installed", lambda key: False)
+    monkeypatch.setattr(it, "console", Mock())
+    launch = Mock()
+    monkeypatch.setattr("omnigent.cli._launch_goose_configure", launch)
+    # Should never reach the select() menu when the CLI is absent.
+    monkeypatch.setattr(it, "select", Mock(side_effect=AssertionError("select called")))
+
+    _manage_goose_harness()
+
+    launch.assert_not_called()
+
+
+def test_manage_goose_harness_back_does_not_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the CLI installed, choosing "← Back" exits without launching configure."""
+    import omnigent.onboarding.goose_auth as ga
+    import omnigent.onboarding.harness_install as hi
+    import omnigent.onboarding.interactive as it
+
+    monkeypatch.setattr(hi, "harness_cli_installed", lambda key: True)
+    monkeypatch.setattr(
+        ga,
+        "goose_config_summary",
+        lambda: ga.GooseConfigSummary(installed=True, provider=None, model=None),
+    )
+    monkeypatch.setattr(it, "console", Mock())
+    launch = Mock(return_value="x")
+    monkeypatch.setattr("omnigent.cli._launch_goose_configure", launch)
+    # rows = [Run goose configure, Show configuration options, ← Back]; pick Back (2).
+    monkeypatch.setattr(it, "select", lambda *a, **k: 2)
+
+    _manage_goose_harness()
+
+    launch.assert_not_called()
+
+
+def test_manage_goose_harness_configure_launches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Choosing "Run goose configure" launches the configure flow, then exits."""
+    import omnigent.onboarding.goose_auth as ga
+    import omnigent.onboarding.harness_install as hi
+    import omnigent.onboarding.interactive as it
+
+    monkeypatch.setattr(hi, "harness_cli_installed", lambda key: True)
+    monkeypatch.setattr(
+        ga,
+        "goose_config_summary",
+        lambda: ga.GooseConfigSummary(installed=True, provider="anthropic", model="claude-x"),
+    )
+    monkeypatch.setattr(it, "console", Mock())
+    launch = Mock(return_value="✓ provider configured: anthropic")
+    monkeypatch.setattr("omnigent.cli._launch_goose_configure", launch)
+    # First iteration: pick "Run goose configure" (0); second: "← Back" (2).
+    choices = iter([0, 2])
+    monkeypatch.setattr(it, "select", lambda *a, **k: next(choices))
+
+    _manage_goose_harness()
+
+    launch.assert_called_once()
